@@ -110,20 +110,9 @@ class Division:
 
         return saturated_edges
 
-    def network_flows(self, teamID, saturated_edges):
-        '''Uses network flows to determine if the team with given team ID
-        has been eliminated. You can feel free to use the built in networkx
-        maximum flow function or the maximum flow function you implemented as
-        part of the in class implementation activity.
-
-        saturated_edges: dictionary of saturated edges that maps team pairs to
-        the amount of additional games they have against each other
-        return: True if team is eliminated, False otherwise
-        '''
-
+    def _build_graph(self, teamID, saturated_edges):
+        '''Builds a new network flow graph from the given team as self.G'''
         self.G = nx.DiGraph()  # reset graph between calls
-
-        # BUILD GRAPH
 
         team_pairs = list(saturated_edges.keys())
 
@@ -142,6 +131,21 @@ class Division:
         point_lead = questioned_team.wins + questioned_team.remaining
         for team in teams:
             self.G.add_edge(team, 'sink', capacity=(point_lead - self.teams[team].wins))
+
+
+
+    def network_flows(self, teamID, saturated_edges):
+        '''Uses network flows to determine if the team with given team ID
+        has been eliminated. You can feel free to use the built in networkx
+        maximum flow function or the maximum flow function you implemented as
+        part of the in class implementation activity.
+
+        saturated_edges: dictionary of saturated edges that maps team pairs to
+        the amount of additional games they have against each other
+        return: True if team is eliminated, False otherwise
+        '''
+        # BUILD GRAPH
+        self._build_graph(teamID, saturated_edges)
 
         # CALCULATE FLOW
 
@@ -163,12 +167,70 @@ class Division:
         the amount of additional games they have against each other
         returns True if team is eliminated, False otherwise
         '''
+        # BUILD GRAPH
+        self._build_graph(teamID, saturated_edges)
 
-        maxflow=pic.Problem()
+        G = self.G
+        capped_edges = {e_view[0:2]: e_view[2] for e_view in G.edges(data='capacity') if e_view[2] is not None}
 
-        #TODO: implement this
+        # import pdb; pdb.set_trace()
+        cc = pic.new_param('c', capped_edges)
+        s = 'source'
+        t = 'sink'
 
-        return False
+
+        maxflow = pic.Problem()
+
+        # Add the flow variables.
+        f = {}
+        for e in G.edges():
+            f[e] = maxflow.add_variable('f[{0}]'.format(e), 1)
+
+        # Add another variable for the total flow.
+        F = maxflow.add_variable('F', 1)
+
+        # Enforce edge capacities.
+        maxflow.add_list_of_constraints(
+            [f[e[0:2]] < cc[e[0:2]] for e in G.edges(data='capacity') if e[2] is not None],  # list of constraints
+            [('e', 2)],                       # e is a double index
+            'edges')                         # set the index belongs to
+
+        # Enforce flow conservation.
+        maxflow.add_list_of_constraints(
+            [pic.sum([f[p, i] for p in G.predecessors(i)], 'p', 'pred(i)')
+                == pic.sum([f[i, j] for j in G.successors(i)], 'j', 'succ(i)')
+                for i in G.nodes() if i not in (s, t)],
+            'i', 'nodes-(s,t)')
+
+        # Set source flow at s.
+        maxflow.add_constraint(
+            pic.sum([f[p, s] for p in G.predecessors(s)], 'p', 'pred(s)') + F
+            == pic.sum([f[s, j] for j in G.successors(s)], 'j', 'succ(s)'))
+
+        # Set sink flow at t.
+        maxflow.add_constraint(
+            pic.sum([f[p, t] for p in G.predecessors(t)], 'p', 'pred(t)')
+            == pic.sum([f[t, j] for j in G.successors(t)], 'j', 'succ(t)') + F)
+
+        # Enforce flow nonnegativity.
+        maxflow.add_list_of_constraints(
+            [f[e] > 0 for e in G.edges()],  # list of constraints
+            [('e', 2)],                   # e is a double index
+            'edges')                     # set the index belongs to
+
+        # Set the objective.
+        maxflow.set_objective('max', F)
+
+        # Solve the problem.
+        solution = maxflow.solve(verbose=0)#, solver='glpk')
+        max_flow = solution['primals']['F'][0]
+
+        # max capacity of leftmost edges
+        ideal_flow = sum(saturated_edges.values())
+
+        # import pdb; pdb.set_trace()
+
+        return max_flow < ideal_flow
 
 
     def checkTeam(self, team):
@@ -230,6 +292,7 @@ if __name__ == '__main__':
         filename = sys.argv[1]
         division = Division(filename)
         for (ID, team) in division.teams.items():
-            print(f'{team.name}: Eliminated? {division.is_eliminated(team.ID, "Network Flows")}')
+            print(f'{team.name}: Eliminated? {division.is_eliminated(team.ID, "Linear Programming")}')
+            break
     else:
         print("To run this code, please specify an input file name. Example: python baseball_elimination.py teams2.txt.")
