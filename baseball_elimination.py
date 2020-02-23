@@ -167,33 +167,29 @@ class Division:
         the amount of additional games they have against each other
         returns True if team is eliminated, False otherwise
         '''
+        # based on <https://picos-api.gitlab.io/picos/graphs.html#max-flow-min-cut-lp>
+
         # BUILD GRAPH
         self._build_graph(teamID, saturated_edges)
 
         G = self.G
         capped_edges = {e_view[0:2]: e_view[2] for e_view in G.edges(data='capacity') if e_view[2] is not None}
 
-        # import pdb; pdb.set_trace()
         cc = pic.new_param('c', capped_edges)
         s = 'source'
         t = 'sink'
-
 
         maxflow = pic.Problem()
 
         # Add the flow variables.
         f = {}
-        for e in G.edges():
-            f[e] = maxflow.add_variable('f[{0}]'.format(e), 1)
+        for e_view in G.edges(data='capacity'):
+            edge = e_view[0:2]
+            capacity = e_view[2]
+            f[edge] = maxflow.add_variable('f[{0}]'.format(edge), 1, lower=0, upper=capacity)
 
         # Add another variable for the total flow.
-        F = maxflow.add_variable('F', 1)
-
-        # Enforce edge capacities.
-        maxflow.add_list_of_constraints(
-            [f[e[0:2]] < cc[e[0:2]] for e in G.edges(data='capacity') if e[2] is not None],  # list of constraints
-            [('e', 2)],                       # e is a double index
-            'edges')                         # set the index belongs to
+        F = maxflow.add_variable('F', 1, lower=0)
 
         # Enforce flow conservation.
         maxflow.add_list_of_constraints(
@@ -207,30 +203,23 @@ class Division:
             pic.sum([f[p, s] for p in G.predecessors(s)], 'p', 'pred(s)') + F
             == pic.sum([f[s, j] for j in G.successors(s)], 'j', 'succ(s)'))
 
-        # Set sink flow at t.
-        maxflow.add_constraint(
-            pic.sum([f[p, t] for p in G.predecessors(t)], 'p', 'pred(t)')
-            == pic.sum([f[t, j] for j in G.successors(t)], 'j', 'succ(t)') + F)
-
-        # Enforce flow nonnegativity.
-        maxflow.add_list_of_constraints(
-            [f[e] > 0 for e in G.edges()],  # list of constraints
-            [('e', 2)],                   # e is a double index
-            'edges')                     # set the index belongs to
-
         # Set the objective.
         maxflow.set_objective('max', F)
 
         # Solve the problem.
-        solution = maxflow.solve(verbose=0)#, solver='glpk')
+        solution = maxflow.solve(verbose=0, solver='cvxopt')
+        if solution['status'] not in ('optimal', 'unknown'):
+            raise Exception('Could not reach optimal solution: {!r}'.format(solution['status']))
         max_flow = solution['primals']['F'][0]
 
         # max capacity of leftmost edges
         ideal_flow = sum(saturated_edges.values())
 
-        # import pdb; pdb.set_trace()
+        # max_flow is a float, so check equality w/ threshold
+        EPSILON = 1e-5
+        result = max_flow < ideal_flow - EPSILON
 
-        return max_flow < ideal_flow
+        return result
 
 
     def checkTeam(self, team):
