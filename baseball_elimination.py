@@ -8,6 +8,8 @@ import picos as pic
 import networkx as nx
 import itertools
 import cvxopt
+import matplotlib
+import matplotlib.pyplot as plt
 
 
 class Division:
@@ -74,9 +76,9 @@ class Division:
         saturated_edges = self.create_network(teamID)
         if not flag1:
             if solver == "Network Flows":
-                flag1 = self.network_flows(saturated_edges)
+                flag1 = self.network_flows(teamID, saturated_edges)
             elif solver == "Linear Programming":
-                flag1 = self.linear_programming(saturated_edges)
+                flag1 = self.linear_programming(teamID, saturated_edges)
 
         return flag1
 
@@ -91,13 +93,24 @@ class Division:
         the amount of additional games they have against each other
         '''
 
+        # keys: sets of all pairs of other teams 
+        # values: reamining matches between those teams
         saturated_edges = {}
 
-        #TODO: implement this
+        if teamID not in self.teams:
+            raise ValueError('unknown teamID: {!r}'.format(teamID))
+
+        other_teams = set(self.teams.keys()) - {teamID}
+
+        team_pairs = itertools.combinations(other_teams, 2)
+
+        for team_a, team_b in team_pairs:
+            remaining = self.teams[team_a].get_against(team_b)
+            saturated_edges[frozenset((team_a, team_b))] = remaining
 
         return saturated_edges
 
-    def network_flows(self, saturated_edges):
+    def network_flows(self, teamID, saturated_edges):
         '''Uses network flows to determine if the team with given team ID
         has been eliminated. You can feel free to use the built in networkx
         maximum flow function or the maximum flow function you implemented as
@@ -108,11 +121,38 @@ class Division:
         return: True if team is eliminated, False otherwise
         '''
 
-        #TODO: implement this
+        self.G = nx.DiGraph()  # reset graph between calls
 
-        return False
+        # BUILD GRAPH
 
-    def linear_programming(self, saturated_edges):
+        team_pairs = list(saturated_edges.keys())
+
+        teams = set(itertools.chain.from_iterable(team_pairs))
+
+        # we don't need to add nodes explicity, so only add edges
+        # leftmost edges from source
+        for pair in team_pairs:
+            pair_node = '_'.join(map(str, pair))
+            self.G.add_edge('source', pair_node, capacity=saturated_edges[pair])
+            for team in pair:
+                self.G.add_edge(pair_node, team)
+
+        # rightmost edges to sink
+        questioned_team = self.teams[teamID]
+        point_lead = questioned_team.wins + questioned_team.remaining
+        for team in teams:
+            self.G.add_edge(team, 'sink', capacity=(point_lead - self.teams[team].wins))
+
+        # CALCULATE FLOW
+
+        flow_value, flow_dict = nx.algorithms.flow.maximum_flow(self.G, 'source', 'sink')
+
+        # max capacity of leftmost edges
+        ideal_flow = sum(saturated_edges.values())
+
+        return flow_value < ideal_flow
+
+    def linear_programming(self, teamID, saturated_edges):
         '''Uses linear programming to determine if the team with given team ID
         has been eliminated. We recommend using a picos solver to solve the
         linear programming problem once you have it set up.
@@ -190,6 +230,6 @@ if __name__ == '__main__':
         filename = sys.argv[1]
         division = Division(filename)
         for (ID, team) in division.teams.items():
-            print(f'{team.name}: Eliminated? {division.is_eliminated(team.ID, "Linear Programming")}')
+            print(f'{team.name}: Eliminated? {division.is_eliminated(team.ID, "Network Flows")}')
     else:
         print("To run this code, please specify an input file name. Example: python baseball_elimination.py teams2.txt.")
